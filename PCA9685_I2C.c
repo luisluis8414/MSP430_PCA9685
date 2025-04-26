@@ -17,7 +17,21 @@ int data_cnt;
 char* packet;
 int packet_length;
 
-// init
+// simple I2C write, first entry in data is addr, rest is data, so {startaddr, data for startaddr, data for startaddr + 1,....}
+void write_I2C(char data[], int length) {
+    packet = data;
+    packet_length = length;
+
+    UCB0TBCNT = length;
+
+    data_cnt = 0;   
+
+    UCB0CTLW0 |= UCTXSTT; // generate start bit
+}
+
+
+
+// init, start in write mode
 void init_I2C(uint8_t addr) {
     WDTCTL = WDTPW | WDTHOLD;
 
@@ -52,23 +66,17 @@ void init_I2C(uint8_t addr) {
     __bis_SR_register(GIE);                     // global interrupt enable
 }
 
-// simple I2C write, first entry in data is addr, rest is data, so {startaddr, data for startaddr, data for startaddr + 1,....}
-void write_I2C(char data[], int length) {
-    packet = data;
-    packet_length = length;
+int main(void) {
+    
+    init_I2C(PCA9685_ADDR);
+    //-- main loop
 
-    UCB0CTLW0 |= UCTR;     // Tx/Write Mode
-    UCB0TBCNT = length;
+    char MODE1_AI_ALLCALL_DATA[] = {0x00, 0x21};
+    write_I2C(MODE1_AI_ALLCALL_DATA, 2);
 
-    data_cnt = 0;   
+    LPM3;
 
-    UCB0CTLW0 |= UCTXSTT; // generate start bit
-}
-
-
-// simple I2C write, first entry in data is addr, rest is data, so {startaddr, data for startaddr, data for startaddr + 1,....}
-void read_I2C(int addr) {
-    char MODE1_ADDR[] = {addr};
+    char MODE1_ADDR[] = {0x00};
     write_I2C(MODE1_ADDR, 1);
 
     LPM3;
@@ -77,45 +85,26 @@ void read_I2C(int addr) {
 
     UCB0TBCNT = 1;
 
-    UCB0CTLW0 |= UCTXSTT; // set start bit
-}
-
-
-//-- main loop
-int main(void) {
-    init_I2C(PCA9685_ADDR);
-
-    char MODE1_AI_ALLCALL_DATA[] = {0x00, 0x21};
-    write_I2C(MODE1_AI_ALLCALL_DATA, 2);
-
-    // while((UCB0IFG & UCSTPIFG) == 0){}
-    // UCB0IFG &= ~UCSTPIFG;
+    UCB0CTLW0 |= UCTXSTT; // generate start bit
 
     LPM3;
 
-    read_I2C(0x00);
-
-    LPM3;
+    UCB0CTLW0 |= UCTR; 
 
     // start at LED0_ON_L then AI 4 data bytes
     char CHANNEL0_ROTATE_SERVO_DATA[] = {LED0_ON_L, 0x00, 0x00, 0x9A, 0x01};
     write_I2C(CHANNEL0_ROTATE_SERVO_DATA, 5);
 
-    // while((UCB0IFG & UCSTPIFG) == 0){}
-    // UCB0IFG &= ~UCSTPIFG;
+    LPM3;
+
+    __delay_cycles(100000);
+
+    // // reset servo
+    // char CHANNEL0_RESET_SERVO_DATA[] = {LED0_ON_L, 0x00, 0x00, 0x00, 0x01}; 
+    // write_I2C(CHANNEL0_RESET_SERVO_DATA, 5);
 
     LPM3;
-    __delay_cycles(1000000);
-
-    char CHANNEL0_0DEG_SERVO_DATA[] = {
-        LED0_ON_L,    // 0x06: Startadresse LED0_ON_L
-        0x00,         // ON_L  = 0
-        0x00,         // ON_H  = 0
-        0xCD,         // OFF_L = 205 (0xCD)
-        0x00          // OFF_H = 0
-    };
-    write_I2C(CHANNEL0_0DEG_SERVO_DATA, 5);
-
+    
     return 0;
 }
 //--------------------------------------------
@@ -125,11 +114,11 @@ int main(void) {
 __interrupt void EUSCI_B0_I2C_ISR(void)
 {
       switch (__even_in_range(UCB0IV, USCI_I2C_UCBIT9IFG)) {
-        // case USCI_NONE: break;   
-        // case USCI_I2C_UCALIFG: break;         // Arbitration lost
-        // case USCI_I2C_UCNACKIFG: break;        // NACK received
-        // case USCI_I2C_UCSTTIFG: break;         // START condition received
-        case USCI_I2C_UCSTPIFG:                  // STOP condition received
+        // case USCI_NONE: break;
+        // case USCI_I2C_UCALIFG: break;       // Arbitration lost
+        // case USCI_I2C_UCNACKIFG: break;     // NACK received
+        // case USCI_I2C_UCSTTIFG: break;      // START condition received
+         case USCI_I2C_UCSTPIFG:                  // STOP condition received
             // bic = bit clear
             __bic_SR_register_on_exit(LPM3_bits);
             break;      
