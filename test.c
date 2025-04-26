@@ -1,0 +1,154 @@
+#include "intrinsics.h"
+#include "msp430fr2355.h"
+#include <stdint.h>
+
+#define PCA9685_ADDR      0x40
+
+#define LED0_ON_L         0x06
+#define LED0_ON_H         0x07
+#define LED0_OFF_L        0x08
+#define LED0_OFF_H        0x09
+
+char data_in; 
+
+// for writing
+int data_cnt;
+
+char* packet;
+int packet_length;
+
+// simple I2C write, first entry in data is addr, rest is data, so {startaddr, data for startaddr, data for startaddr + 1,....}
+void write_I2C(char data[], int length) {
+    packet = data;
+    packet_length = length;
+
+    UCB0TBCNT = length;
+
+    data_cnt = 0;   
+
+    UCB0CTLW0 |= UCTXSTT; // generate start bit
+}
+
+
+
+// init, start in write mode
+void init_I2C(uint8_t addr) {
+    WDTCTL = WDTPW | WDTHOLD;
+
+    //-- setup B0 I2C
+
+    UCB0CTLW0 |= UCSWRST;    // put into SW reset
+
+    UCB0CTLW0 |= UCSSEL_3;  // choose SMCLK
+
+    UCB0BRW = 20;            // sets prescaler to 10 -- 1Mhz / 20 
+
+    UCB0CTLW0 |= UCMODE_3;  // put into i2c mode
+    UCB0CTLW0 |= UCMST;     // put into master mode
+    UCB0CTLW0 |= UCTR;     // Tx/Write Mode
+
+    UCB0I2CSA = addr;       // slave adress
+
+    UCB0CTLW1 |= UCASTP_2;  // auto stop mode based on byte counter UCB0TBCNT
+
+    //-- configure ports
+    P1SEL1 &= ~BIT3;        // P1.3 = SCL
+    P1SEL0 |= BIT3;
+
+    P1SEL1 &= ~BIT2;        // P1.2 = SDA
+    P1SEL0 |= BIT2;
+
+    PM5CTL0 &= ~LOCKLPM5;   // turns on I/O
+
+    UCB0CTLW0 &= ~UCSWRST;  // take out of SW reset
+
+    //-- enable IRQs
+    UCB0IE |= UCRXIE0;      // local enable for RX buff;
+    UCB0IE |= UCTXIE0;      // local enable for TX buff;
+    __enable_interrupt();   // enable maskables
+}
+
+int main(void) {
+    
+    init_I2C(PCA9685_ADDR);
+    //-- main loop
+
+    char MODE1_AI_ALLCALL_DATA[] = {0x00, 0x21};
+    write_I2C(MODE1_AI_ALLCALL_DATA, 2);
+
+    while((UCB0IFG & UCSTPIFG) == 0){}
+    UCB0IFG &= ~UCSTPIFG;
+
+    char MODE1_ADDR[] = {0x00};
+    write_I2C(MODE1_ADDR, 1);
+
+    while((UCB0IFG & UCSTPIFG) == 0){}
+    UCB0IFG &= ~UCSTPIFG;
+
+    UCB0CTLW0 &= ~UCTR; 
+
+    UCB0TBCNT = 1;
+
+    UCB0CTLW0 |= UCTXSTT; // generate start bit
+
+    while((UCB0IFG & UCSTPIFG) == 0){}
+    UCB0IFG &= ~UCSTPIFG;
+
+    UCB0CTLW0 |= UCTR; 
+
+    // start at LED0_ON_L then AI 4 data bytes
+    char CHANNEL0_ROTATE_SERVO_DATA[] = {LED0_ON_L, 0x00, 0x00, 0x9A, 0x01};
+    write_I2C(CHANNEL0_ROTATE_SERVO_DATA, 5);
+
+    while((UCB0IFG & UCSTPIFG) == 0){}
+    UCB0IFG &= ~UCSTPIFG;
+
+    __delay_cycles(100000);
+
+    // reset servo
+    char CHANNEL0_RESET_SERVO_DATA[] = {LED0_ON_L, 0x00, 0x00, 0x00, 0x01}; 
+    write_I2C(CHANNEL0_RESET_SERVO_DATA, 5);
+
+    while((UCB0IFG & UCSTPIFG) == 0){}
+    UCB0IFG &= ~UCSTPIFG;
+
+    LPM3;
+    return 0;
+}
+//--------------------------------------------
+//-- ISRs
+
+#pragma vector = EUSCI_B0_VECTOR
+__interrupt void EUSCI_B0_I2C_ISR(void)
+{
+      switch (__even_in_range(UCB0IV, USCI_I2C_UCBIT9IFG)) {
+        // case USCI_NONE: break;
+        // case USCI_I2C_UCALIFG: break;       // Arbitration lost
+        // case USCI_I2C_UCNACKIFG: break;     // NACK received
+        // case USCI_I2C_UCSTTIFG: break;      // START condition received
+        // case USCI_I2C_UCSTPIFG: break;      // STOP condition received
+        // case USCI_I2C_UCRXIFG3: break;
+        // case USCI_I2C_UCTXIFG3: break;
+        // case USCI_I2C_UCRXIFG2: break;
+        // case USCI_I2C_UCTXIFG2: break;
+        // case USCI_I2C_UCRXIFG1: break;
+        // case USCI_I2C_UCTXIFG1: break;
+        case USCI_I2C_UCRXIFG0:     
+            data_in = UCB0RXBUF;
+            break;
+        case USCI_I2C_UCTXIFG0:
+            if (data_cnt == packet_length - 1) {
+                char data = packet[data_cnt];
+                UCB0TXBUF = data;
+                data_cnt = 0;
+            }else {
+                UCB0TXBUF = packet[data_cnt];
+                data_cnt++;
+            }
+            break;
+        // case USCI_I2C_UCBCNTIFG: break;
+        // case USCI_I2C_UCCLTOIFG: break;
+        // case USCI_I2C_UCBIT9IFG: break;
+        default: break;
+    }
+}

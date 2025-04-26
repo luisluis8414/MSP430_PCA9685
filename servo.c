@@ -63,7 +63,7 @@ void I2C_Init(int addr){
     //-- Take eUSCI_B0 out of SW reset---------------------------------
     UCB0CTLW0 &= ~UCSWRST;      // Put eUSCI_B0 out of software reset
 
-    UCB0IE |= UCTXIE0;          // Enable I2C_B0 Tx IRQ
+    UCB0IE |= UCTXIE0 | UCNACKIE;         // TX-Interrupt + NACK-Interrupt aktivieren
     __enable_interrupt();
 }
 
@@ -96,46 +96,49 @@ void pca9685_set_pwm_interrupt(uint8_t channel, uint16_t on, uint16_t off) {
     UCB0CTLW0 |= UCTR | UCTXSTT;
 }
 
-
-
 int main(void) {
     WDTCTL = WDTPW | WDTHOLD;
     PM5CTL0 &= ~LOCKLPM5;
 
-    I2C_Init(PCA9685_ADDR);
+    P1DIR  |= BIT0;     // direction = output
+    P1OUT  &= ~BIT0;    // start with LED off
 
+    I2C_Init(PCA9685_ADDR);          // SMCLK 1 MHz, 100 kHz I²C
     __delay_cycles(10000);
 
-    // PCA9685 Setup
+    /* 1. Auto‑Increment + Sleep */
     i2c_write_register_interrupt(PCA9685_MODE1, MODE1_AI | MODE1_SLEEP);
-    __delay_cycles(100000);  // Warte, damit Chip bereit ist
 
-    i2c_write_register_interrupt(PCA9685_PRESCALE, 121); // 50 Hz
-    __delay_cycles(100000);
+    /* 2. Prescaler für 50 Hz: prescale = 121 */
+    i2c_write_register_interrupt(PCA9685_PRESCALE, 121);
 
-    i2c_write_register_interrupt(PCA9685_MODE1, MODE1_AI); // Wake up
-    __delay_cycles(100000);
+    /* 3. Aufwecken – SLEEP=0, AI=1 */
+    i2c_write_register_interrupt(PCA9685_MODE1, MODE1_AI);
 
+    /* 3a. ≥ 500 µs warten, bis der Oszillator läuft */
+    __delay_cycles(600);          // 600 Zyklen @1 MHz ≈ 600 µs
+
+    /* 3b. PWM‑Logik per RESTART freigeben */
+    i2c_write_register_interrupt(PCA9685_MODE1, MODE1_AI | MODE1_RESTART);
+
+    /* 4. Ausgangstreiber push‑pull */
     i2c_write_register_interrupt(PCA9685_MODE2, MODE2_OUTDRV);
-    __delay_cycles(100000);
 
-    // Servo bei LED0 auf Mittelstellung
-    pca9685_set_pwm_interrupt(0, 0, 375);  // 1.5ms Puls → 90°
+    /* 5. Servo‑Kanal 0 initialisieren */
+    pca9685_set_pwm_interrupt(0, 0, SERVO_MIN);   // 1,5 ms
 
+    // pca9685_set_pwm_interrupt(0, 0, SERVO_MAX);   // 1,5 ms
     while (1) {
         __delay_cycles(1000000);
     }
 }
-
 
 #pragma vector = EUSCI_B0_VECTOR
 __interrupt void EUSCI_B0_I2C_ISR(void) {
     switch (__even_in_range(UCB0IV, USCI_I2C_UCBIT9IFG)) {
         case USCI_NONE: break;
         case USCI_I2C_UCALIFG: break;       // Arbitration lost
-        case USCI_I2C_UCNACKIFG:            // NACK received
-            P1OUT |= BIT0;
-            break;    
+        case USCI_I2C_UCNACKIFG: break;     // NACK received
         case USCI_I2C_UCSTTIFG: break;      // START condition received
         case USCI_I2C_UCSTPIFG: break;      // STOP condition received
         case USCI_I2C_UCRXIFG3: break;
@@ -146,9 +149,12 @@ __interrupt void EUSCI_B0_I2C_ISR(void) {
         case USCI_I2C_UCTXIFG1: break;
         case USCI_I2C_UCRXIFG0: break;
         case USCI_I2C_UCTXIFG0:
-            if (tx_index < tx_length) {
-                UCB0TXBUF = tx_data[tx_index++];
-            }
+                if (tx_index < tx_length) {
+                    UCB0TXBUF = tx_data[tx_index++];
+                } else {
+                    UCB0CTLW0 |= UCTXSTP; // STOP senden nach letztem Byte!
+                    UCB0IE &= ~UCTXIE0;    // Optional: TX-Interrupt deaktivieren
+                }
             break;
         case USCI_I2C_UCBCNTIFG: break;
         case USCI_I2C_UCCLTOIFG: break;
