@@ -22,6 +22,7 @@ void write_I2C(char data[], int length) {
     packet = data;
     packet_length = length;
 
+    UCB0CTLW0 |= UCTR; 
     UCB0TBCNT = length;
 
     data_cnt = 0;   
@@ -29,6 +30,18 @@ void write_I2C(char data[], int length) {
     UCB0CTLW0 |= UCTXSTT; // generate start bit
 }
 
+void read_I2C(int addr) {
+    char MODE1_ADDR[] = {addr};
+    write_I2C(MODE1_ADDR, 1);
+
+    LPM3;
+
+    UCB0CTLW0 &= ~UCTR; 
+
+    UCB0TBCNT = 1;
+
+    UCB0CTLW0 |= UCTXSTT; // generate start bit
+}
 
 
 // init, start in write mode
@@ -76,35 +89,16 @@ int main(void) {
 
     LPM3;
 
-    char MODE1_ADDR[] = {0x00};
-    write_I2C(MODE1_ADDR, 1);
+    // read_I2C(0x00);
 
-    LPM3;
-
-    UCB0CTLW0 &= ~UCTR; 
-
-    UCB0TBCNT = 1;
-
-    UCB0CTLW0 |= UCTXSTT; // generate start bit
-
-    LPM3;
-
-    UCB0CTLW0 |= UCTR; 
-
+    // LPM3;
+   
     // start at LED0_ON_L then AI 4 data bytes
     char CHANNEL0_ROTATE_SERVO_DATA[] = {LED0_ON_L, 0x00, 0x00, 0x9A, 0x01};
     write_I2C(CHANNEL0_ROTATE_SERVO_DATA, 5);
 
     LPM3;
 
-    __delay_cycles(100000);
-
-    // // reset servo
-    // char CHANNEL0_RESET_SERVO_DATA[] = {LED0_ON_L, 0x00, 0x00, 0x00, 0x01}; 
-    // write_I2C(CHANNEL0_RESET_SERVO_DATA, 5);
-
-    LPM3;
-    
     return 0;
 }
 //--------------------------------------------
