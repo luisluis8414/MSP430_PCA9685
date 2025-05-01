@@ -9,6 +9,11 @@
 #define LED0_OFF_L        0x08
 #define LED0_OFF_H        0x09
 
+#define LED_ON_L(channel)  (LED0_ON_L + 4 * (channel))
+#define LED_ON_H(channel)  (LED0_ON_H + 4 * (channel))
+#define LED_OFF_L(channel) (LED0_OFF_L + 4 * (channel))
+#define LED_OFF_H(channel) (LED0_OFF_H + 4 * (channel))
+
 char data_in; 
 
 // for writing
@@ -79,10 +84,50 @@ void init_I2C(uint8_t addr) {
     __bis_SR_register(GIE);                     // global interrupt enable
 }
 
+void delay_ms(uint16_t ms) {
+    while (ms--) {
+        __delay_cycles(1000); // Assuming 1 MHz clock, 1000 cycles = 1 ms
+    }
+}
+
+void delay_s(uint16_t seconds) {
+    while (seconds--) {
+        delay_ms(1000); // 1000 ms = 1 second
+    }
+}
+
+void set_servo_position(uint8_t channel, uint16_t position) {
+    if(channel > 15){
+        return;
+    }
+
+    char servo_data[] = {LED_ON_L(channel), 0x00, 0x00, (position & 0xFF), (position >> 8)};
+    write_I2C(servo_data, 5);
+    LPM3;
+}
+
 int main(void) {
+    P1DIR |= BIT0;              // P1.0 (LED) as output
+    P1OUT &= ~BIT0;             // LED off
+
+    P1DIR &= ~BIT1;             // P1.1 as input (Button)
+    P1REN |= BIT1;              // Enable pull resistor
+    P1OUT |= BIT1;              // Pull-up resistor
+
+    P1IES |= BIT1;              // High-to-low transition
+    P1IFG &= ~BIT1;             // Clear any pending interrupt
+    P1IE  |= BIT1;              // Enable interrupt on P1.1
     
     init_I2C(PCA9685_ADDR);
-    //-- main loop
+
+    //-- Set PWM frequency to 50hz
+    // https://cdn-shop.adafruit.com/datasheets/PCA9685.pdf page 25
+    // round(25,000,000/(4096 × 50)) - 1 = 121 (0x79)
+    // has to happen while in SLEEP Mode
+    char PRESCALE_DATA[] = {0xFE, 0x79}; 
+    write_I2C(PRESCALE_DATA, 2);
+
+    LPM3;
 
     char MODE1_AI_ALLCALL_DATA[] = {0x00, 0x21};
     write_I2C(MODE1_AI_ALLCALL_DATA, 2);
@@ -92,18 +137,31 @@ int main(void) {
     // read_I2C(0x00);
 
     // LPM3;
-   
-    // start at LED0_ON_L then AI 4 data bytes
-    char CHANNEL0_ROTATE_SERVO_DATA[] = {LED0_ON_L, 0x00, 0x00, 0x9A, 0x01};
-    write_I2C(CHANNEL0_ROTATE_SERVO_DATA, 5);
 
-    LPM3;
+    set_servo_position(0, 205); // Min position (adjust as needed)
+    set_servo_position(15, 205); // Min position (adjust as needed)
 
-    return 0;
+   while (1) {
+    if (!(P1IN & BIT1)) { // Button pressed (active low)
+        if (!(P1OUT & BIT0)) { // Check if LED is off
+            P1OUT |= BIT0;    // Turn on LED
+            set_servo_position(0, 460); // Max position
+            set_servo_position(15, 460); // Max position
+        }
+    } else { // Button released
+        if (P1OUT & BIT0) { // Check if LED is on
+            P1OUT &= ~BIT0;   // Turn off LED
+            set_servo_position(0, 205); // Min position
+            set_servo_position(15, 205); // Min position
+            LPM3;
+        }
+    }
+    delay_ms(50); // Small delay to debounce the button
+    }
 }
+
 //--------------------------------------------
 //-- ISRs
-
 #pragma vector = EUSCI_B0_VECTOR
 __interrupt void EUSCI_B0_I2C_ISR(void)
 {
@@ -140,4 +198,12 @@ __interrupt void EUSCI_B0_I2C_ISR(void)
         // case USCI_I2C_UCBIT9IFG: break;
         default: break;
     }
+}
+
+#pragma vector=PORT1_VECTOR
+__interrupt void Port_1(void)
+{
+    __bic_SR_register_on_exit(LPM3_bits);
+
+    P1IFG &= ~BIT1;         
 }
