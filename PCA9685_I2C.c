@@ -14,6 +14,11 @@
 #define LED_OFF_L(channel) (LED0_OFF_L + 4 * (channel))
 #define LED_OFF_H(channel) (LED0_OFF_H + 4 * (channel))
 
+unsigned int ADC_Result_1;
+unsigned int ADC_Result_2;
+unsigned int ADC_Result_3;
+unsigned int ADC_Result_4;   
+
 char data_in; 
 
 // for writing
@@ -39,7 +44,7 @@ void read_I2C(int addr) {
     char MODE1_ADDR[] = {addr};
     write_I2C(MODE1_ADDR, 1);
 
-    LPM3;
+    LPM0;
 
     UCB0CTLW0 &= ~UCTR; 
 
@@ -51,10 +56,6 @@ void read_I2C(int addr) {
 
 // init, start in write mode
 void init_I2C(uint8_t addr) {
-    WDTCTL = WDTPW | WDTHOLD;
-
-    //-- setup B0 I2C
-
     UCB0CTLW0 |= UCSWRST;    // put into SW reset
 
     UCB0CTLW0 |= UCSSEL_3;  // choose SMCLK
@@ -75,13 +76,34 @@ void init_I2C(uint8_t addr) {
     P1SEL1 &= ~BIT2;        // P1.2 = SDA
     P1SEL0 |= BIT2;
 
-    PM5CTL0 &= ~LOCKLPM5;   // turns on I/O
-
     UCB0CTLW0 &= ~UCSWRST;  // take out of SW reset
 
     //-- enable IRQs
     UCB0IE |= UCRXIE0 | UCTXIE0 | UCSTPIE;      // enable READ, WRITE, PAUSE Interrupts
     __bis_SR_register(GIE);                     // global interrupt enable
+}
+
+void init_ADC(void) {
+    P1SEL0 |= BIT1; // P1.1 as ADC input (A1)
+    P1SEL1 |= BIT1;
+
+    P1SEL0 |= BIT5; // P1.5 as ADC input (A5)
+    P1SEL1 |= BIT5;
+
+    P1SEL0 |= BIT4;  // P1.4 as ADC input (A5)
+    P1SEL1 |= BIT4; 
+
+    // P1.6 as ADC input (A6)
+    P1SEL0 |= BIT6;
+    P1SEL1 |= BIT6;
+
+    // Configure ADC
+    ADCCTL0 |= ADCSHT_2 | ADCON; // ADC ON, S&H=16 ADC clks
+    ADCCTL1 |= ADCSHP;           // Use sampling timer
+    ADCCTL2 &= ~ADCRES;          // Clear resolution bits
+    ADCCTL2 |= ADCRES_2;         // 12-bit resolution
+    ADCMCTL0 |= ADCINCH_1;       // Input channel A1, Vref=AVCC
+    ADCIE |= ADCIE0;             // Enable ADC conversion complete interrupt
 }
 
 void delay_ms(uint16_t ms) {
@@ -103,22 +125,27 @@ void set_servo_position(uint8_t channel, uint16_t position) {
 
     char servo_data[] = {LED_ON_L(channel), 0x00, 0x00, (position & 0xFF), (position >> 8)};
     write_I2C(servo_data, 5);
-    LPM3;
+    LPM0;
 }
 
 int main(void) {
-    P1DIR |= BIT0;              // P1.0 (LED) as output
-    P1OUT &= ~BIT0;             // LED off
+    WDTCTL = WDTPW | WDTHOLD;
+    PM5CTL0 &= ~LOCKLPM5;  
 
-    P1DIR &= ~BIT1;             // P1.1 as input (Button)
-    P1REN |= BIT1;              // Enable pull resistor
-    P1OUT |= BIT1;              // Pull-up resistor
+    P1DIR |= BIT0;  // LED-Pin auf Ausgang setzen
+    P1OUT &= ~BIT0; // LED ausschalten zu Beginn
 
-    P1IES |= BIT1;              // High-to-low transition
-    P1IFG &= ~BIT1;             // Clear any pending interrupt
-    P1IE  |= BIT1;              // Enable interrupt on P1.1
-    
+    P1DIR &= ~BIT7;             // P1.7 as input (Button)
+    P1REN |= BIT7;              // Enable pull resistoir
+    P1OUT |= BIT7;              // Pull-up resistor
+
+    P1IES |= BIT7;              // High-to-low transition
+    P1IFG &= ~BIT7;             // Clear any pending interrupt
+    P1IE  |= BIT7;              // Enable interrupt on P1.7
+
     init_I2C(PCA9685_ADDR);
+    init_ADC();
+    
 
     //-- Set PWM frequency to 50hz
     // https://cdn-shop.adafruit.com/datasheets/PCA9685.pdf page 25
@@ -127,37 +154,68 @@ int main(void) {
     char PRESCALE_DATA[] = {0xFE, 0x79}; 
     write_I2C(PRESCALE_DATA, 2);
 
-    LPM3;
+    LPM0;
 
     char MODE1_AI_ALLCALL_DATA[] = {0x00, 0x21};
     write_I2C(MODE1_AI_ALLCALL_DATA, 2);
 
-    LPM3;
+    LPM0;
 
-    // read_I2C(0x00);
+    // read_I2C(0xFE);
 
-    // LPM3;
+    // LPM0;
 
-    set_servo_position(0, 205); // Min position (adjust as needed)
-    set_servo_position(15, 205); // Min position (adjust as needed)
+    while (1) {
+        // // First: Read Pot 1 (A1)
+        ADCCTL0 &= ~ADCENC;  
+        ADCMCTL0 = ADCINCH_1; // Select A1
+        ADCCTL0 |= ADCENC | ADCSC;
+        __bis_SR_register(LPM0_bits | GIE);
+        uint16_t servo_position1 = ((uint32_t)(4095 - ADC_Result_1) * 700) / 4095 + 60 ;
+        set_servo_position(0, servo_position1);
 
-   while (1) {
-    if (!(P1IN & BIT1)) { // Button pressed (active low)
-        if (!(P1OUT & BIT0)) { // Check if LED is off
-            P1OUT |= BIT0;    // Turn on LED
-            set_servo_position(0, 460); // Max position
-            set_servo_position(15, 460); // Max position
+        // // Second: Read Pot 2 (A5)
+        ADCCTL0 &= ~ADCENC;  
+        ADCMCTL0 = ADCINCH_5; // Select A5
+        ADCCTL0 |= ADCENC | ADCSC;
+        __bis_SR_register(LPM0_bits | GIE);
+        uint16_t servo_position2 = ((uint32_t)(4095 - ADC_Result_2) * 700) / 4095 + 60;
+        set_servo_position(4, servo_position2); 
+
+        ADCCTL0 &= ~ADCENC;  
+        ADCMCTL0 = ADCINCH_4; // Select A4
+        ADCCTL0 |= ADCENC | ADCSC;
+        __bis_SR_register(LPM0_bits | GIE);
+        uint16_t servo_position3 = ((uint32_t)(4095 - ADC_Result_3) * 700) / 4095 + 60;
+        set_servo_position(8, servo_position3); 
+
+        // ––– Fourth pot: P1.6/A6 –––
+        ADCCTL0 &= ~ADCENC;                // disable
+        ADCMCTL0  = ADCINCH_6;             // select channel A6
+        ADCCTL0 |= ADCENC | ADCSC;         // start conversion
+        __bis_SR_register(LPM0_bits | GIE);
+
+        uint16_t servo_position4 = ((uint32_t)(4095 - ADC_Result_4) * 700) / 4095 + 60;
+        set_servo_position(11, servo_position4); 
+
+        if (!(P1IN & BIT7)) { // Button pressed (active low)
+            if (!(P1OUT & BIT0)) { // Check if LED is off
+                P1OUT |= BIT0;    // Turn on LED
+                // set_servo_position(0, 460); // Max position
+                set_servo_position(3, 350); // Max position
+            }
+            } else { // Button released
+                if (P1OUT & BIT0) { // Check if LED is on
+                    P1OUT &= ~BIT0;   // Turn off LED
+                    // set_servo_position(0, 210); // Min position
+                    set_servo_position(3, 210); // Min position
+            }
         }
-    } else { // Button released
-        if (P1OUT & BIT0) { // Check if LED is on
-            P1OUT &= ~BIT0;   // Turn off LED
-            set_servo_position(0, 205); // Min position
-            set_servo_position(15, 205); // Min position
-            LPM3;
-        }
+        // delay_ms(10);
     }
-    delay_ms(50); // Small delay to debounce the button
-    }
+
+   
+
 }
 
 //--------------------------------------------
@@ -172,7 +230,7 @@ __interrupt void EUSCI_B0_I2C_ISR(void)
         // case USCI_I2C_UCSTTIFG: break;      // START condition received
          case USCI_I2C_UCSTPIFG:                  // STOP condition received
             // bic = bit clear
-            __bic_SR_register_on_exit(LPM3_bits);
+            __bic_SR_register_on_exit(LPM0_bits);
             break;      
         // case USCI_I2C_UCRXIFG3: break;
         // case USCI_I2C_UCTXIFG3: break;
@@ -200,10 +258,47 @@ __interrupt void EUSCI_B0_I2C_ISR(void)
     }
 }
 
+
+// ADC interrupt service routine
+#pragma vector=ADC_VECTOR
+__interrupt void ADC_ISR(void)
+{
+    switch(__even_in_range(ADCIV,ADCIV_ADCIFG))
+    {
+        case ADCIV_NONE:
+            break;
+        case ADCIV_ADCOVIFG:
+            break;
+        case ADCIV_ADCTOVIFG:
+            break;
+        case ADCIV_ADCHIIFG:
+            break;
+        case ADCIV_ADCLOIFG:
+            break;
+        case ADCIV_ADCINIFG:
+            break;
+        case ADCIV_ADCIFG:
+             if ((ADCMCTL0 & 0x0F) == ADCINCH_1) {
+                ADC_Result_1 = ADCMEM0;
+            } else if ((ADCMCTL0 & 0x0F) == ADCINCH_5) {
+                ADC_Result_2 = ADCMEM0;
+            } else if ((ADCMCTL0 & 0x0F) == ADCINCH_4) {
+                ADC_Result_3 = ADCMEM0;
+            } else if ((ADCMCTL0 & 0x0F) == ADCINCH_6) {
+                ADC_Result_4 = ADCMEM0;
+            }
+            __bic_SR_register_on_exit(LPM0_bits);
+            break;
+        default:
+            break;
+    }
+}
+
+
 #pragma vector=PORT1_VECTOR
 __interrupt void Port_1(void)
 {
-    __bic_SR_register_on_exit(LPM3_bits);
+    __bic_SR_register_on_exit(LPM0_bits);
 
-    P1IFG &= ~BIT1;         
+    P1IFG &= ~BIT7;         
 }
