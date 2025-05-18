@@ -1,6 +1,6 @@
-# RoboArm using the MSP430FR2355 wwith the PCA9685
+# RoboArm using the MSP430FR2355 with the PCA9685
 
-## 🖼️ Preview (GIF)
+## 🖼️ Demo
 ![Servo Demo](assets/roboGif.gif)
 
 This project demonstrates how to use a **MSP430FR2355** microcontroller to control servos via a **PCA9685 I2C servo driver**. The servo positions are dynamically set using a slave arm with **four potentiometers** connected to the ADC, and a **push button** toggles an additional servo for grip.
